@@ -22,20 +22,21 @@ STATIC_PARAMS = {
     "boosting": "gbdt",
     "objective": "binary",
     "metric": "auc",
+    "max_depth": 2,
     "verbosity": -1,
 }
 HOST = "127.0.0.1"
 PORT = 8999
-RUN_ID = "3"
+RUN_ID = "4"
 WORKING_DIRECTORY = "."
 
 HPO_PARAMS = {
     "n_calls": 100,
     "eta": 3,
     "min_budget": 1,
-    "max_budget": 10,
+    "max_budget": 60,
     "num_samples": 64,
-    "top_n_percent": 15,
+    "top_n_percent": 10,
     "min_bandwidth": 1e-3,
     "bandwidth_factor": 3,
 }
@@ -70,12 +71,26 @@ def get_rank_features(df):
         df.groupby(["customer_id"])["common_item_set_0"].rank("max")
         / df.groupby("customer_id").size()
     )
+    df["customer_rank2"] = (
+        df.groupby(["customer_id"])["common_brand_1"].rank("max")
+        / df.groupby("customer_id").size()
+    )
+    df["customer_rank3"] = (
+        df.groupby(["customer_id"])["common_category_1"].rank("max")
+        / df.groupby("customer_id").size()
+    )
+
     # df['customer_rank2'] = df.groupby(['customer_id'])['common_item_set_1'].rank('max')/df.groupby('customer_id').size()
     # df['customer_rank3'] = df.groupby(['customer_id'])['common_item_set_2'].rank('max')/df.groupby('customer_id').size()
     df["campaign_rank1"] = (
         df.groupby(["campaign_id"])["common_item_set_0"].rank("max")
         / df.groupby("campaign_id").size()
     )
+    df["campaign_rank2"] = (
+        df.groupby(["campaign_id"])["common_brand_0"].rank("max")
+        / df.groupby("campaign_id").size()
+    )
+
     # df['campaign_rank2'] = df.groupby(['campaign_id'])['common_item_set_1'].rank('max')/df.groupby('campaign_id').size()
     # df['campaign_rank3'] = df.groupby(['campaign_id'])['common_item_set_2'].rank('max')/df.groupby('campaign_id').size()
     df["coupon_rank1"] = (
@@ -147,12 +162,18 @@ class TrainEvalWorker(Worker):
         self.x_tr, self.x_val = map_campign_id(self.x_tr, self.x_val, "val")
         self.x_tr = get_rank_features(self.x_tr)
         self.x_val = get_rank_features(self.x_val)
+        # self.y_tr = self.y_tr[self.x_tr.coupon_id != 8]
+        # self.x_tr = self.x_tr.loc[self.x_tr.coupon_id != 8]
+
         self.feats = [
             f
-            for f in self.x_tr.columns
+            for i, f in enumerate(self.x_tr.columns)
             if ("coupon_details" not in f)
-            and (f not in ["campaign_id", "customer_campaign_count"])
-        ] + ["coupon_details_quantity_0"]
+            and ("common_repeats" not in f)
+            and (
+                f not in ["campaign_id", "customer_campaign_count", "redemption_status"]
+            )
+        ]
 
     def compute(self, config, budget, working_directory, *args, **kwargs):
         lgb_params = {k: v for k, v in config.items() if k not in self.feats}
@@ -182,28 +203,28 @@ class TrainEvalWorker(Worker):
     def get_configspace(self):
         cs = CS.ConfigurationSpace()
         learning_rate = CSH.UniformFloatHyperparameter(
-            "learning_rate", lower=0.01, upper=0.02, default_value=0.01, log=False
+            "learning_rate", lower=0.003, upper=0.005, default_value=0.004, log=False
         )
         num_leaves = CSH.UniformIntegerHyperparameter(
-            "num_leaves", lower=4, upper=12, default_value=8, log=False
-        )
-        max_depth = CSH.UniformIntegerHyperparameter(
-            "max_depth", lower=3, upper=5, default_value=4, log=False
+            "num_leaves", lower=3, upper=4, default_value=3, log=False
         )
         min_data_in_leaf = CSH.UniformIntegerHyperparameter(
-            "min_data_in_leaf", lower=10, upper=1000, default_value=100, log=False
+            "min_data_in_leaf", lower=400, upper=1000, default_value=700, log=False
         )
         feature_fraction = CSH.UniformFloatHyperparameter(
-            "feature_fraction", lower=0.1, upper=0.9, default_value=0.5, log=False
+            "feature_fraction", lower=0.1, upper=0.9, default_value=0.45, log=False
         )
         subsample = CSH.UniformFloatHyperparameter(
             "subsample", lower=0.5, upper=1.0, default_value=0.8, log=False
         )
         l1 = CSH.UniformFloatHyperparameter(
-            "lambda_l1", lower=1e-12, upper=10.0, default_value=0.1, log=True
+            "lambda_l1", lower=1e-12, upper=10.0, default_value=1.0, log=True
         )
         l2 = CSH.UniformFloatHyperparameter(
-            "lambda_l2", lower=1e-12, upper=10.0, default_value=0.1, log=True
+            "lambda_l2", lower=1e-12, upper=10.0, default_value=1.0, log=True
+        )
+        seed = CSH.UniformIntegerHyperparameter(
+            "seed", lower=1, upper=10000, default_value=7861
         )
         # feats_flag = [
         #    CSH.UniformIntegerHyperparameter(feat, lower=0, upper=1, default_value=1)
@@ -213,13 +234,12 @@ class TrainEvalWorker(Worker):
             [
                 learning_rate,
                 num_leaves,
-                max_depth,
                 min_data_in_leaf,
                 feature_fraction,
                 subsample,
                 l1,
                 l2,
-                # *feats_flag,
+                seed,
             ]
         )
         return cs
@@ -279,7 +299,7 @@ if __name__ == "__main__":
 
     best_auc = -1.0 * results.fun
     best_params = results.x
-
+    print(results)
     # log metrics
     print("Best Validation AUC: {}".format(best_auc))
     print("Best Params: {}".format(best_params))
