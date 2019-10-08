@@ -48,3 +48,12 @@ test['row_rank'] = list(range(n))/n
 
 # Using above `row_rank` without any model scores 0.89+ on LB.
 ```
+
+Reproducing results:
+* Change following parameter in mllib/params.py
+    * FileName.train and FileName.test values to train and test filenames
+    * DATA --> path where all data resides
+* Run `bash reproduce_stuff.sh` in terminal
+* Finally run all notebook in order --> Model_v8.ipynb, Model_v9.ipynb, Model_v12.ipynb, Model_v13.ipynb, Model_v14, Model_v15
+* Final notebook will write out `sub_en5.csv` in `DATA` folder
+
